@@ -1,0 +1,300 @@
+---
+title: "Visualizing Morrow Plot Data (1888-2021)"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+## adding cowplot for more viz options including custom grids
+library(cowplot)
+library(scales)
+
+
+```
+
+
+### Setup
+Read in Morrow 1888-2021 v02
+
+```{r read}
+mp882103 <- read_csv("Morrow_1888-2021_v02.csv")
+```
+
+
+Set plot_dir as a factor so we can order it according to direction instead of alphabetically.
+
+```{r as factor}
+mp882103 <- mp882103 %>% 
+  mutate(plot_dir = factor(plot_dir, levels = c("NW", "NE", "SW", "SE")))
+```
+
+
+Add phase column using phases identified in Wander that correspond to changes in treatment strategies.
+
+```{r phase}
+mp882103 <- mp882103 %>% 
+  mutate(phase = case_when(year <= 1903 ~ 1,
+                           year >= 1904 & year <= 1954 ~ 2,
+                           year >= 1955 & year <= 1967 ~ 3,
+                           year >= 1968 & year <= 1997 ~ 4,
+                           year >= 1998~ 5)
+           ) %>% 
+  select(phase, everything())
+```
+
+
+Subset corn crops
+
+```{r sub corn}
+## subset corn crops
+corn <- filter(mp882103, corn == TRUE) %>% 
+  mutate(rotation = as_factor(rotation))
+```
+
+
+Set up reusable functions for common chart elements.
+
+```{r elements}
+
+
+## x axis breaks by decade
+decades <- scale_x_continuous(breaks= c(1888,1900,1920, 1940,1960,1980,2000,2020))
+
+## phase lines
+phases <- tibble(phase = 1:5, date = c(1888,1904,1955,1968,1998), y = .66)
+lines <- geom_vline(data = phases, mapping = aes(xintercept=date), color = "dimgray", size = 1)
+
+## phase labels
+labels <- geom_label(data = phases, mapping = aes(x = date, y = y, label = date), color = "dimgray")
+                            
+## facet by direction
+direction <-  facet_wrap(vars(plot_dir), ncol = 2)
+
+## facet by subplot
+subplot <-  facet_wrap(vars(plot), ncol = 4)
+
+## crop names on y axis
+cropnames <- scale_y_discrete(labels=c("Alfalfa", "Corn in Rotation", "Continuous Corn", "Hay", "Oats", "Soybeans"))
+
+## crop color code
+cropcolor <-   scale_color_manual(
+  labels = c("A" = "Alfalfa",
+                                "C" = "Corn",
+                                "CC"="Cont. Corn",
+                                "H" = "Hay",
+                                "O" = "Oats",
+                                "S" = "Soybeans"),
+  values = c("A" = "#88CCEE",
+                                "C" = "#44AA99",
+                                "CC"="#999933",
+                                "H" = "#DDCC77",
+                                "O" = "#cc6677",
+                                "S" = "#AA4499"))
+
+## treatment color code
+treatcolor <-   scale_color_manual(values = c(
+                                "none" = "#88CCEE",
+                                "MLrP" = "#332288",
+                                "MLbP" = "#44AA99",
+                                "MLrPNsPK" = "#cc6677",
+                                "0LNsPK" = "#DDCC77",
+                                "MLP" = "#117733",
+                                "LHNPK" = "#AA4499",
+                                "LNPK" = "#999933"
+                                ))
+
+## treatment shape
+treatshape <-   scale_shape_manual(values = c(
+                                "FALSE" = 1,
+                                "TRUE" = 16))
+
+
+## treatment linetype
+treatline <- scale_linetype_manual(values = c("dashed", "solid"))
+
+
+```
+
+
+## Crop History
+
+```{r crop time}
+
+ggplot() +
+  geom_count(data = mp882103, mapping = aes(x= year, y= crop, color = crop, size = 1))+
+  decades+
+  lines+
+  labels+
+  cropcolor+
+  cropnames+
+  labs(title = "Crop Timeline",
+       subtitle = "Years each crop was grown") +
+  theme_light()+
+  theme(legend.position = "none")+
+   guides(x = guide_axis(angle = 45)) 
+
+
+```
+
+```{r crop facet}
+
+ggplot() +
+  geom_count(data = mp882103,
+             mapping = aes(x= year, y= crop, color = crop, size = 1))+
+  decades+
+  lines+
+  cropcolor+
+  cropnames+
+    labs(title = "Crop Timeline by Plot Number",
+       subtitle = "Years each crop was grown",
+       caption = "Plot 3 = continuous corn   |   Plot 4 = two-crop rotation   |   Plot 5 = three-crop rotation") +
+  theme_light()+
+  theme(legend.position = "none")+
+   guides(x = guide_axis(angle = 45))+
+  facet_grid(plot_num ~ .)
+
+
+```
+
+
+## Treatment History
+
+```{r treat timeline}
+
+## setting treatments as a factor and ordering the factor values according to phase so they sort chronologically.
+mp882103 <- mutate(mp882103, treatment = fct_reorder(treatment, desc(phase)))
+
+
+ggplot() +
+  geom_count(data = mp882103, mapping = aes(x= year, y= treatment, color = treatment, size = 1), shape = 15)+
+  decades+
+  lines+
+  labels+
+  treatcolor+
+    labs(title = "Treatment Timeline",
+       subtitle = "Years each treatment was applied") +
+  theme_light()+
+  theme(legend.position = "none")+
+   guides(x = guide_axis(angle = 45)) 
+
+```
+
+
+## Treatment Maps
+
+Faceting revealed that phase 4 treatments began in 1968 not 1967 as indicated in Wander. Changed the phase variable to start phase 4 in 1968, but should be investigated.
+
+```{r treat facet}
+
+
+treatphase <- function(z) {
+  
+ggplot(data = filter(mp882103, phase == z & plot_num == 4), 
+       mapping = aes(x= year, y= treatment)) +
+  geom_line(aes(color = treatment, size = 1))+
+  geom_label(aes(label = treatment),
+            data = filter(mp882103, phase == z & plot_num == 4) %>% filter(year == min(year)),
+            nudge_x = 5)+
+  scale_x_continuous(labels = label_number(accuracy = 1))+
+  labs(title = paste("Phase", z, "Treatment Map"),
+       subtitle = "Years each treatment was applied",
+       caption = "N & S indicate North and South. Western sections are split into A & B. Eastern sections are split into C & D.")+
+  theme_light()+
+  theme(legend.position = "none", axis.text.y=element_blank())+
+   guides(x = guide_axis(angle = 45))+
+  
+  treatcolor+
+  subplot
+}
+
+
+treatphase(1)
+treatphase(2)
+treatphase(3)
+treatphase(4)
+treatphase(5)
+```
+
+
+## Yield History by Plot
+
+Scatterplot for each plot with yield_bush data color coded by crop. Excludes hay, which is measured in tons.
+
+```{r yield history}
+
+plotyield <- function(n) {
+
+ggplot(data = filter(mp882103, !is.na(crop) & plot_num == n)) +
+  geom_point (mapping = aes(x= year, y = yield_bush, color = crop, shape = treated), size = 2.5, na.rm = TRUE) +
+  treatshape+
+  cropcolor+
+  lines+
+  theme_light()+
+  guides(x = guide_axis(angle = 45)) +
+             labs(title = paste("Yield History Plot", n)) +
+  facet_wrap(vars(plot_dir), ncol = 2) 
+}
+
+plotyield(3)
+plotyield(4)
+plotyield(5)
+
+
+```
+
+
+## Corn Yield Comparison
+
+```{r corn}
+
+ggplot(data = corn, na.rm = TRUE, aes(year, yield_bush, color = rotation)) +
+  geom_smooth(aes(linetype = treated))+
+  guides(x = guide_axis(angle = 45)) +
+  treatline+
+  decades+
+  lines +
+  labels+
+  labs(title = "Corn Yield by Rotation and Treatment",
+       subtitle = "The highest yields consistently come from corn that is both rotated and treated.")+
+  theme_light()
+  
+  
+
+```
+
+
+### Create summary dataset of corn yield by rotation, treatment, phase
+
+```{r summary}
+summary <- group_by(corn, rotation, treated, phase) %>% 
+  summarize(yield_min = min(yield_bush, na.rm = TRUE),
+            yield_ave = mean(yield_bush, na.rm = TRUE),
+            yield_max = max(yield_bush, na.rm = TRUE)) %>% 
+  arrange(rotation)
+
+write_csv(summary, "Morrow_1888-2021_v03_summary.csv")
+```
+
+
+### Export merged and transformed data 1888-2021_v03
+
+```{r export}
+write_csv(mp882103, "Morrow_1888-2021_v03.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

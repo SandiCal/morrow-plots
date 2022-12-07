@@ -1,0 +1,166 @@
+---
+title: "Exploring Morrow Plot Data (1888-2021)"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+
+```
+
+
+Here we're getting to know the dataset, checking for missing values, adding some calculated variables to make analysis easier, and looking at value distributions.
+
+
+### Read in Morrow 1888-2021 v01
+```{r read}
+mp882102 <- read_csv("Morrow_1888-2021_v01.csv")
+```
+
+
+### Missing values?
+Do we have an observation for each plot for each year? First, create a full list of all years in our range. Then, compare that to the years actually in the data, and list any missing years.
+
+```{r date sequence}
+FullSeq <- seq(min(mp882102$year),max(mp882102$year))
+Missing <- FullSeq[!FullSeq %in% mp882102$year]
+print(Missing)
+```
+
+
+A check back to the original data file for 1955-2021 indeed contains no data for any plot for 2010 or 2014. We can also quickly check how many observations we have for each plot to see if we have other gaps. 
+
+```{r missing}
+
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x= plot)) +
+  guides(x = guide_axis(angle = 45)) +
+             labs(title = "Plot Distribution")
+```
+
+
+There is some slight variation, so the data is a bit spotty for the years we do have. We can correct both problems. First by inserting placeholders for 2010 and 2014, and then by using complete() to fill in the gaps with NAs.
+
+```{r complete}
+
+mp882102 <- mp882102 %>% 
+  ## including the plot because if we let it fill with NA complete() will think NA is a new plot name
+  add_row(year = 2010, plot = "3NA") %>% 
+  add_row(year = 2014, plot = "3NA")
+
+mp882102 <- mp882102 %>% 
+  complete(year, plot)
+
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x= plot)) +
+  guides(x = guide_axis(angle = 45)) +
+             labs(title = "Plot Distribution")
+```
+
+
+That should look even now. And a check to look at just the newly added rows. They should have only have values for year and plot. We may need to filter NAs out of analyses now, which creates a little extra work, but the data is more honest now with those implicit missing values made explicit. We could fill in some fields like rotation and treated with what we know of the experiment, but that should wait for a later version when there's a demonstrated need to fill in those gaps. For now, we want to stay true to the information provided in our original sources. 
+
+``` {r check missing}
+
+(check <- filter(mp882102, year %in% Missing))
+
+
+```
+
+
+### Plot and subplot
+Although the plot variable is nice and clear, it doesn't give us an easy way to create groups of plots. Retaining the plot variable as is (e.g. 3NA) because that labeling scheme is prominent in the recent literature about Morrow, but also adding plot_num and plot_dir. That will enable grouping by original plot number and cardinal direction. Direction was used to determine the treatment applications, and Odell also notes that there are soil differences between the East and West plots, so it may be useful. A/B refers to west subplots, and C/D refers to east subplots, but we don't want to have to tell R that every time we need to filter by direction. 
+
+```{r subplots}
+
+mp882102 <- mp882102 %>% 
+  mutate(plot_num = str_sub(plot, 1,1),
+         plot_dir = case_when(
+          str_detect(plot,"NA|NB") == TRUE ~ "NW",
+          str_detect(plot,"NC|ND") == TRUE ~ "NE",
+          str_detect(plot,"SA|SB") == TRUE ~ "SW",
+          str_detect(plot,"SC|SD") == TRUE ~ "SE"
+        )) %>% 
+  select(year, plot, plot_num, plot_dir, everything())
+
+print(mp882102)
+```
+
+
+Checking to see that our distribution of NSEW looks nice and even.
+
+``` {r NSEW check}  
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x= plot_num, fill = plot_dir)) +
+             labs(title = "Plot Distribution")
+```
+
+
+## Explore Crops
+
+```{r crop count}
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x=crop, fill = crop)) +
+             labs(title = "Crop Distribution")
+           
+```
+
+
+Obviously, it's mostly corn, but it would be nice to have a way to group crops as corn and not corn. Adding a T/F corn variable for easy grouping.
+
+```{r not corn}
+mp882102 <- mp882102 %>% 
+  mutate(corn = ifelse(str_detect(crop,"C") ,TRUE,FALSE)) %>% 
+  select(year:rotation, corn, everything())
+
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x=corn, fill = crop)) +
+             labs(title = "Corn vs. Not Corn")
+
+```
+
+
+### Explore Variety
+
+```{r variety count}
+ggplot(data = filter(mp882102, !is.na(variety))) +
+  geom_bar(mapping = aes(x= variety, fill = crop)) +
+  guides(x = guide_axis(angle = 45)) +
+             labs(title = "Variety Distribution")
+```
+
+
+### Explore Treatment
+
+```{r treatment count}
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x= treated, fill = treatment)) +
+             labs(title = "Treatment Distribution")
+```
+
+
+### Explore Crop Rotation
+
+First, changing rotation from a numeric variable to a factor so it can be used in groupings. We should see rotation consistency for each plot throughout the entire experiment (except for some missing data).
+
+```{r rotation}
+
+mp882102 <- mutate(mp882102, rotation = as.factor(rotation))
+
+ggplot(data = mp882102) +
+  geom_bar(mapping = aes(x= plot, fill = rotation)) +
+  guides(x = guide_axis(angle = 45)) +
+             labs(title = "Rotation by Plot")
+```
+
+
+### Explort cleaned data
+
+```{r write}
+
+write_csv(mp882102, "Morrow_1888-2021_v02.csv")
+```

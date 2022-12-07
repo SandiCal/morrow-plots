@@ -1,0 +1,65 @@
+---
+title: "morrow_plots_v01"
+output: html_document
+date: "2022-08-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+```
+
+## Soil Data
+
+Soil sample inventory received from Maia Rothman of the Margenot Lab 8/22/2022 after a meeting between the lab and working group. 
+
+Each sample has a SampleID, but IDs are repeated in the dataset because one sample may be split into multiple jars.
+
+Collected dates were inconsistently formatted, so before importing, pulled the Year into a separate column. 
+
+## Import MP00 and Soil Data
+
+Import both files.
+
+```{r read}
+soil0421 <- read_csv("MorrowPlotsInventoryData01.csv")
+mp00 <- read_csv("morrow_plots_v00_1888-2021.csv")
+```
+
+
+### Lookup Soil Samples
+
+We can compare mp00 to the soil data to see which years have soil samples. However, the plot/field naming conventions don't exactly match up. mp00 uses ABCD throughout and soil uses EW until 1967, for the most part. There are some inconsistencies in the soil field names, which I did not attempt to fix. So, this comparison will only show definite matches. 
+
+```{r lookup}
+
+## Create year_field variable in soil0421 
+soil0421 <- soil0421 %>% 
+  mutate(year_field = str_c(YearCollected, Field))
+
+
+## Create year_plot variable in mp00, adjusting pre-1967 values to match the naming convention used in soil.
+mp00 <- mp00 %>% 
+  mutate(year_plot = 
+    (if_else(year<1967,
+             str_c(year,plot_num,plot_dir),
+             str_c(year,plot))
+    ))
+
+## Lookup year_plot values in year_field and return TRUE when there's a match        
+mp01 <- mp00 %>% 
+  mutate(soil_sample = mp00$year_plot %in% soil0421$year_field) %>% 
+  select(phase:plant_day, soil_sample, damage, notes)
+
+
+```
+
+
+### Export mp01
+
+```{r export}
+write_csv(mp01, "morrow-plots_v01_1888-2021_soil.csv")
+
+```

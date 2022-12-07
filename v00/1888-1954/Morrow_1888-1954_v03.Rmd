@@ -1,0 +1,285 @@
+---
+title: "Tidying Morrow Plot Data (1888-1954)"
+output: html_document
+---
+
+#### Converting the 1955-2021 Morrow Plot data into a tidy format.
+
+Note: Literature referenced includes 3 sources about the history of the experiment: Aref & Wander (1998), Odell (1982), and DeTurk (1927).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+
+```
+
+
+### Setup
+
+Read in the file. 
+
+```{r read file}
+mp885403 <- read_csv("./8854v02/Morrow_1888-1954_v02.csv",
+                                          )
+print(head(mp885403))
+```
+
+
+### Add data from notebook 
+Read in separate table with planting dates and varieties pulled from Morrow Plots Notebook, 1876-1913: https://digital.library.illinois.edu/items/eef64cf0-51c5-0138-7202-02d0d7bfd6e4-7#?cv=47&r=0&xywh=-3833%2C0%2C9676%2C2999
+
+```{r read nb}
+mpnb <- read_csv("Morrow_notebook_1876-1913.csv")
+print(head(mpnb))
+```
+
+### Merge notebook data and mp885403
+To merge the notebook data to the correct plot, I combine plot and year to make a temporary key that matches across the two datasets, add mpnb data to mp885403, and then remove the key. 
+
+```{r merge}
+
+mpnb <- mpnb %>%  
+  mutate(key = str_c(year, plot)) %>% 
+  select(key, variety, plant_date)
+
+mp885403 <- mp885403 %>% 
+  mutate(key = str_c(year, plot)) %>% 
+  left_join(mpnb, by = "key") %>% 
+  select(-"key")
+knitr::kable(head(mp885403))
+  
+```
+
+
+### Calculate plant_day
+Format date as date and calculate plant_day.
+
+```{r plantday}
+
+mp885403 <- mp885403 %>% 
+  separate(plant_date,into = c("plmonth","plday","plyear")) %>% 
+   mutate(plant_date = make_date(plyear,plmonth,plday),
+          plant_day = yday(plant_date)
+          ) %>% 
+   select(-c("plyear","plmonth","plday"))
+print(head(mp885403))
+  
+```
+
+### Continuous Corn and Crop Abbreviations
+Crop rotation is important, but we still need an easy way to differentiate between the continuous corn in plot 3 and the corn in plots 4 and 5 that grows in rotation with other crops. Following Aref & Wander's example, I use CC for continuous corn, and the first letter of other crop names. 
+
+
+```{r crop abbr}
+
+mp885403 <- mp885403 %>% 
+  mutate(
+    crop = case_when(
+      crop == "Corn" & (str_detect(plot,"3") == TRUE) ~ "CC",
+      crop == "Corn" & (str_detect(plot,"3") == FALSE) ~ "C",
+      crop == "Hay" ~ "H",
+      crop == "Oats" ~ "O")
+  )
+knitr::kable(head(mp885403))
+```
+
+### Gather Yield
+
+Yield is spread across three columns: No Treatment, MLrP and MLbP, and needs to be gathered into one. Before doing that, I am flagging the empty cells for MLrP and MLbP for 1888 - 1903 with 999 because those treatments weren't introduced until 1904. I want to differentiate these blanks, which are just an artifact of the original table configuration, from other blanks that actually represent missing yield data. After gathering, I filter out rows with 999. After that, years 88-03 should each have 3 rows, and 1904 onward should have 9.
+
+
+```{r gather yield}
+
+mp885403 <- mp885403 %>% 
+  mutate(
+    MLrP = ifelse(year < 1904, 999, MLrP),
+    MLbP = ifelse(year < 1904, 999, MLbP)
+  )
+    
+mp885403 <- mp885403 %>% 
+  gather('Not Treated', 'MLrP', 'MLbP', key = "treatment", value = "yield") %>% 
+  filter(yield < 999)
+knitr::kable(head(mp885403))
+```
+
+
+### Add a T/F Treated Variable
+Treatments are typically applied before corn is planted, which means subplots on a crop rotation schedule may only be treated every 2 or 3 years. Yet, for the purposes of this experiment, subplots do not need to receive treatments every year to be considered treated. Treated is more of an ongoing identity, which I will clarify with a T/F treated variable based on data in treatment. Also, change "not treated" to "none" to match mp552103.
+
+
+```{r treated}
+
+mp885403 <- mp885403 %>% 
+  mutate(
+    treatment = str_replace(treatment, "Not Treated", "none" ),
+    treated = ifelse(treatment == "none", FALSE, TRUE))
+knitr::kable(head(mp885403))
+```
+
+
+### Flag All-Corn Years
+According to the crop rotation schedule, corn should be grown on all plots every 6 years, allowing for yield comparisons where weather isn't a variable. The pattern holds true for this dataset starting in 1901. Prior to that, there are two all-corn years: 1893 and 1899. Adding an all_corn flag to those years to make it easier to factor that into analysis without doing the math every time. A quick check ensure no years flagged as all_corn have anything other than Cs in the crop vector. If done correctly, the check should produce a tibble of 0 rows.
+
+
+```{r all-corn}
+
+corn <- c(1893, 1899, seq(1901, 1954, by=6))
+
+mp885403 <- mp885403 %>% 
+  mutate(all_corn = ifelse(year %in% corn, TRUE, FALSE))
+
+(filter(mp885403, all_corn == TRUE & str_detect(crop,"C", negate = TRUE)))
+```
+
+
+### Rearrange columns
+
+
+```{r rearrange}
+
+mp885403 <-  select(mp885403, year, plot, rotation, crop, variety, yield, treated, treatment, plant_date, plant_day, all_corn, everything())
+knitr::kable(head(mp885403))
+
+```
+
+### Divide into Subplots
+Over time, plots 3, 4, and 5 were divided again and again as new variables were incorporated into the experiment. The original plot 3 includes all of the land that will become plots 3NA - 3SD. Because yield was recorded not as a total but as a per acre rate, we can apply the plot rate to all of the subplots instead of having to divide the yield by 8.  
+
+```{r subplots03}
+
+## starting with 88-03
+
+mp1903 <- filter(mp885403, year <1904)
+
+## very dumb repetition, should probably be a function, but...
+
+mp1903 <- mp1903 %>% 
+  mutate(
+    'NA' = yield,
+    NB = yield,
+    NC = yield,
+    ND = yield,
+    SA = yield,
+    SB = yield,
+    SC = yield,
+    SD = yield
+    ) %>% 
+   
+  gather('NA', 'NB', 'NC', 'ND', 'SA', 'SB', 'SC', 'SD', key = "subplot", value = "yield") %>% 
+  mutate(plot = str_c(plot,subplot)) %>% 
+  select(-"subplot")         
+
+```
+
+
+After the introduction of fertilizer, the subplots get a bit trickier. What would eventually become NA-ND were untreated, SA and SB were treated with MLrP, and SC and SD were treated with MLbP. Again, using 999 to indicate blanks created as we move data around that don't actually represent missing data, so they can be easily deleted.
+
+
+```{r subplots54}
+
+## now 04-54
+
+mp1954 <- filter(mp885403, year >1903)
+
+## defining some variables to simplify the code to create subplot yield variables
+Tn <- ifelse(str_detect(mp1954$treatment,"none") == TRUE, mp1954$yield,999)
+Tr <- ifelse(str_detect(mp1954$treatment,"MLrP") == TRUE, mp1954$yield,999)
+Tb <- ifelse(str_detect(mp1954$treatment,"MLbP") == TRUE, mp1954$yield,999)
+
+
+mp1954 <- mp1954 %>% 
+  mutate(
+    'NA' = Tn,
+    NB = Tn,
+    NC = Tn,
+    ND = Tn,
+    SA = Tr,
+    SB = Tr,
+    SC = Tb,
+    SD = Tb
+    ) %>% 
+  
+gather('NA', 'NB', 'NC', 'ND', 'SA', 'SB', 'SC', 'SD', key = "subplot", value = "yield") %>% 
+  mutate(plot = str_c(plot,subplot)) %>%
+  filter(yield != 999) %>% 
+  select(-"subplot")
+
+```
+
+
+Recombine 1903 and 1954 into one dataset
+
+```{r recombine}
+
+mp885403 <- rbind(mp1903,mp1954)
+knitr::kable(head(mp885403))
+```
+
+
+
+### Split Yield
+All crop yields are in the same column, but hay is measured in tons whereas all other crops are measured in bushels. There are a couple of ways to address this. One option would be to add a new variable for yield_unit with values of either bushel or ton. My concern with this approach is that it would be too easy to ignore the unit variable and conflate bushels and tons. There's nothing about the yield vector that would send up red flags. I'm going with a second option and splitting yield into two columns - yield_bus and yield_ton. That way, it's obvious that neither yield column is complete. That should be obvious even if the dataset is subsetted to only include one yield vector. If having two yield vectors complicates analysis too much, I'll backtrack and try the other option. Pulling average yields by crop to check that only hay yields are measured in tons. 
+
+
+```{r split yield}
+mp885403 <- mp885403 %>% 
+  mutate(
+    yield_bush = ifelse(crop != "H", yield, NA),
+    yield_ton = ifelse(crop == "H", yield, NA)
+  ) %>% 
+  select(-"yield")
+knitr::kable(head(mp885403))
+```
+
+
+### Rearrange columns and export
+
+```{r export}
+
+mp885403 <-  select(mp885403, year, plot, rotation, crop, variety, all_corn, yield_bush, yield_ton, treated, treatment, plant_date, plant_day, notes, everything())
+knitr::kable(head(mp885403))
+
+
+write_csv(mp885403,"Morrow_1888-1954_v03.csv")
+```
+
+### Combine with 1955-2021 data
+
+Create a combined dataset, adding NA values in 8854 for all the variables that are only in 5521. 
+
+``` {r bind}
+mp552103 <- read_csv("Morrow_1955-2021_v03.csv",
+                     col_types = cols(
+                       damage = col_character(),
+                       notes = col_character())
+                     ) 
+      
+## in mp552103, change 0 treatment to "none" to match mp885403
+mp552103 <- mutate(mp552103, treatment = ifelse(treatment == 0, "none",treatment))
+                     
+## add columns to mp885403 to match mp552103                     
+mp885403 <- mutate(mp885403, 
+                   manure = NA,
+                   lime = NA,
+                   nit = NA,
+                   p205 = NA,
+                   k20 = NA,
+                   stover = NA,
+                   population = NA,
+                   damage = NA
+                   ) %>% 
+  select(year, plot, rotation, crop, variety, all_corn, yield_bush, yield_ton, treated, treatment, manure, lime, nit, p205, k20, stover, population, plant_date, plant_day, damage, notes, everything())
+
+## bind and rearrange
+mp882101 <- rbind(mp885403,mp552103)
+mp882101 <- arrange(mp882101, year, plot)
+
+knitr::kable(head(mp882101))
+
+write_csv(mp882101,"Morrow_1888-2021_v01.csv")
+
+```
+
+

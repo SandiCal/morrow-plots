@@ -1,0 +1,194 @@
+---
+title: "Tidying Morrow Plot Data (1955-2021)"
+output: html_document
+---
+
+#### Converting the 1955-2021 Morrow Plot data into a tidy format.
+
+Note: Literature referenced includes 3 sources about the history of the experiment: Aref & Wander (1998), Odell (1982), and DeTurk (1927).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+
+```
+
+
+
+### Setup
+
+Read in the file. Specifying the 'damage' and 'notes' vectors as character data because they're really sparse, making it hard for R to guess the correct format. If not noted, R classes them as logical. Dates are also formatted incorrectly, but I will deal with those separately later because I also need to correct the years in the planting dates.
+
+```{r read file}
+mp552103 <- read_csv("./5521v02/Morrow_1955-2021_v02.csv",
+                     
+                     col_types = cols(
+                       damage = col_character(),
+                       notes = col_character())
+                     )
+print(head(mp552103))
+
+## removing one row of all NAs
+mp552103 <- drop_na(mp552103, year)
+```
+
+
+
+## 1. Clarify Crops
+This experiment tests two main variables - crop rotation and soil treatments - but neither is clearly flagged in the data.  
+
+
+### 1.1 Crop rotation
+The crop rotation schedule isn't recorded in any variable. It's only implied by the changing of crops over time. Adding a 'rotation' vector with values 1, 2 and 3 denotes both the number of crops in rotation and the number of years in the cycle.   
+
+
+```{r rotation}
+
+mp552103 <- mp552103 %>% 
+  mutate(
+    rotation = case_when(
+      (str_detect(plot,"3")) == TRUE ~ 1,
+      (str_detect(plot,"4")) == TRUE ~ 2,
+      (str_detect(plot,"5")) == TRUE ~ 3)
+  )
+knitr::kable(head(mp552103))
+```
+
+
+### 1.2 Continuous Corn and Crop Abbreviations
+Crop rotation is important, but we still need an easy way to differentiate between the continuous corn in plot 3 and the corn in plots 4 and 5 that grows in rotation with other crops. Following Aref & Wander's example, I use CC for continuous corn, and the first letter of other crop names. 
+
+
+```{r crop abbr}
+
+mp552103 <- mp552103 %>% 
+  mutate(
+    crop = case_when(
+      crop == "Alfalfa" ~ "A",
+      crop == "Corn" & (str_detect(plot,"3") == TRUE) ~ "CC",
+      crop == "Corn" & (str_detect(plot,"3") == FALSE) ~ "C",
+      crop == "Hay" ~ "H",
+      crop == "Oats" ~ "O",
+      crop == "Soybeans" ~ "S")
+  )
+knitr::kable(head(mp552103))
+```
+
+
+### 1.3 Split Yield
+All crop yields are in the same column, but hay is measured in tons whereas all other crops are measured in bushels. There are a couple of ways to address this. One option would be to add a new variable for yield_unit with values of either bushel or ton. My concern with this approach is that it would be too easy to ignore the unit variable and conflate bushels and tons. There's nothing about the yield vector that would send up red flags. I'm going with a second option and splitting yield into two columns - yield_bush and yield_ton. That way, it's obvious that neither yield column is complete. That should be obvious even if the dataset is subsetted to only include one yield vector. If having two yield vectors complicates analysis too much, I'll backtrack and try the other option. Pulling average yields by crop to check that only hay yields are measured in tons. 
+
+
+```{r yield}
+
+mp552103 <- mp552103 %>% 
+  mutate(
+    yield_bush = ifelse(crop != "H", yield, NA),
+    yield_ton = ifelse(crop == "H", yield, NA)
+  ) %>% 
+  select(-"yield")
+
+knitr::kable(
+(group_by(mp552103,crop) %>% 
+  summarize(
+    total_bush = sum(yield_bush, na.rm=TRUE),
+    total_ton = sum(yield_ton, na.rm=TRUE)
+    )),
+digits = 0
+)
+```
+
+
+
+## 2. Clarify Treatments
+Treatments are complicated. The treatment variable records the treatment strategy, and specific amounts of various treatments are recorded in:  manure, lime, nit, p205, and k20. (Stover is also applied to the plots, but isn't considered a treatment variable in this experiment.) 
+
+### 2.1 Treatment Check
+With so many treatment variables, there is a lot of room for error. A quick check will reveal if any plots with 0 treatment have data in any of the variables that measure annual treatment amounts. 
+
+```{r check}
+
+knitr::kable(
+filter(mp552103, treatment == 0 & !is.na(manure | lime | nit | p205 | k20))
+)
+
+```
+
+
+### 2.2 Note Questionable Treatment Data
+We have some mismatches - 6 out of 1560 isn't too bad. None of them have any explanatory notes, and they are all present in the original dataset, and so are not a result of any errors introduced here. According to the literature, North plots A, C and D should have been untreated, so the treatment variable may be correct. It's possible that these amounts were entered in the wrong rows. Looking at the data from nearby subplots in those years, there are some subplots that should have been treated, but don't contain treatment amount data. However, there's no way to confirm that, so I'm leaving this contradictory data in place. Instead, I'm adding a note to these rows. What this really shows is that the treatment amount data may not be totally reliable. That's not surprising considering how complex and sparse it is.
+
+
+```{r note}
+
+mp552103 <- mp552103 %>% 
+  mutate(notes = ifelse(
+    treatment == 0 & !is.na(manure | lime | nit | p205 | k20),
+    "treatment amount present for untreated plot", notes))
+
+knitr::kable(
+  filter(mp552103, treatment == 0 & ((manure | lime | nit | p205 | k20) > 0)) %>% 
+    select(year:crop, treatment, notes)
+)
+```
+
+
+### 2.3 Add a T/F Treatment Variable
+Treatments are typically applied before corn is planted, which means subplots on a crop rotation schedule may only be treated every 2 or 3 years. Yet, for the purposes of this experiment, subplots do not need to receive treatments every year to be considered treated. Treated is more of an ongoing identity, which I will clarify with a T/F treated variable based on data in treatment.
+
+
+```{r treated}
+
+mp552103 <- mp552103 %>% 
+  mutate(treated = ifelse(treatment == 0, FALSE, TRUE))
+knitr::kable(head(mp552103))
+```
+
+
+
+## 3. Dates
+
+### 3.1 Fix Planting Dates
+Planting dates have the incorrect year, which wasn't a problem in the original Excel because they were formatted to show only the month and day. That date is also formatted as a character field instead of a date. To fix both problems, separating plant_date into year, month and day, and creating a new plant_date with the correct year.
+
+
+```{r dates}
+
+mp552103 <- mp552103 %>% 
+  separate(plant_date,into = c("plmonth","plday","plyear")) %>% 
+   mutate(plant_date = make_date(year,plmonth,plday)) %>% 
+   select(-c("plyear","plmonth","plday"))
+knitr::kable(head(mp552103))
+```
+
+
+### 3.2 Flag All-Corn Years
+According to the crop rotation schedule, corn is grown on all plots every 6 years, allowing for yield comparisons where weather isn't a variable. Adding an all_corn flag to those years to make it easier to factor that into analysis without doing the math every time. A quick check ensure no years flagged as all_corn have anything other than Cs in the crop vector. If done correctly, the check should produce a tibble of 0 rows.
+
+
+```{r all-corn}
+
+corn <- seq(1955,2020,by=6)
+
+mp552103 <- mp552103 %>% 
+  mutate(all_corn = ifelse(year %in% corn, TRUE, FALSE))
+
+(filter(mp552103, all_corn == TRUE & str_detect(crop,"C", negate = TRUE)))
+```
+
+
+## 4. Rearrange columns and export
+
+
+```{r rearrange}
+
+mp552103 <-  select(mp552103, year, plot, rotation, crop, variety, all_corn, yield_bush, yield_ton, treated, treatment, manure, lime, nit, p205, k20, stover, population, plant_date, plant_day, damage, notes, everything())
+knitr::kable(head(mp552103))
+
+
+write_csv(mp552103,"Morrow_1955-2021_v03.csv")
+```
+
+
