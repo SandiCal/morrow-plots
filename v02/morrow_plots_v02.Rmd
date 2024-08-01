@@ -1,0 +1,36 @@
+---
+title: "morrow_plots_v02"
+output: html_document
+date: "2024-08-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.kable.NA = "**")
+library(tidyverse)
+library(lubridate)
+```
+
+## Import v01 data
+
+Source: Morrow Plots Data Curation Working Group (2022): Morrow Plots Treatment and Yield Data. University of Illinois at Urbana-Champaign. https://doi.org/10.13012/B2IDB-7865141_V1
+
+```{r read}
+mp01 <- read_csv("morrow-plots_v01_1888-2021_soil.csv")
+
+```
+## Create v02 with corrected 2021 all_corn data
+
+The T/F all_corn variable flags years when corn was grown on all three plots. 2021 was an all-corn year, but the data for that year was incorrectly flagged as FALSE.
+
+```{r allcorn}
+## create a new version of the data with corrected values for 2021 all_corn
+mp02 <- mp01 %>% 
+  mutate(all_corn = 
+    (if_else(year==2021,
+             TRUE,
+             all_corn)
+    ))
+```
+
+v02 data will be made available in the Illinois Data Bank at https://doi.org/10.13012/B2IDB-7865141_V2
